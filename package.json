@@ -1,0 +1,16 @@
+{
+  "name": "webrtc-signaling-server",
+  "version": "1.0.0",
+  "description": "WebRTC Signaling Server for Tour Guide App",
+  "main": "server.js",
+  "scripts": {
+    "start": "bun run server.js",
+    "dev": "bun run --watch server.js"
+  },
+  "keywords": ["webrtc", "signaling", "tours", "audio"],
+  "author": "Tour Guide App",
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
