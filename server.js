@@ -20,7 +20,6 @@ const server = Bun.serve({
 
     open(ws) {
       console.log('Client connected');
-      ws.send(JSON.stringify({ type: 'connected' }));
     },
 
     close(ws) {
@@ -59,12 +58,12 @@ const server = Bun.serve({
 });
 
 function handleMessage(ws, data, connectionInfo) {
-  const { type, tourId, userId, role } = data;
+  const { type, tourId, userId } = data;
   const { userId: fromId } = connectionInfo;
 
   switch (type) {
     case 'join-tour':
-      joinTour(ws, tourId, userId, role);
+      joinTour(ws, tourId, userId, data.role);
       break;
     case 'offer':
     case 'answer':
@@ -117,7 +116,6 @@ function leaveTour(ws) {
 
   if (tour.guide && tour.guide.userId === userId) {
     console.log(`Guide ${userId} left tour ${tourId}`);
-    // Notify all participants
     for (const participantWs of tour.participants.values()) {
       participantWs.send(JSON.stringify({ type: 'guide-left' }));
     }
@@ -126,7 +124,6 @@ function leaveTour(ws) {
   } else if (tour.participants.has(userId)) {
     tour.participants.delete(userId);
     console.log(`Participant ${userId} left tour ${tourId} (${tour.participants.size} remaining)`);
-    // Notify the guide
     if (tour.guide) {
       tour.guide.ws.send(JSON.stringify({
         type: 'participant-left',
@@ -147,7 +144,8 @@ function relay(fromId, tourId, data) {
 
     if (tour.guide && tour.guide.userId === targetId) {
         targetWs = tour.guide.ws;
-    } else {
+    } 
+    else {
         targetWs = tour.participants.get(targetId);
     }
     
