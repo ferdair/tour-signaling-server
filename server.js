@@ -338,17 +338,22 @@ function handleDisconnection(ws) {
 // Cleanup de conexiones muertas cada 30 segundos
 setInterval(() => {
   let cleaned = 0;
+  const aliveConnections = new Set();
+  
+  // Enviar ping a todas las conexiones
   connections.forEach((connection, ws) => {
     try {
       ws.send(JSON.stringify({ type: 'ping' }));
+      aliveConnections.add(ws);
     } catch (error) {
+      console.log(`Connection dead: ${connection.role} ${connection.userId}`);
       handleDisconnection(ws);
       cleaned++;
     }
   });
 
   if (cleaned > 0) {
-    console.log(`Cleaned up ${cleaned} dead connections`);
+    console.log(`Cleaned up ${cleaned} dead connections. Active: ${aliveConnections.size}`);
   }
 }, 30000);
 
