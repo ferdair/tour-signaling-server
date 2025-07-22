@@ -1,3 +1,4 @@
+// server.js - Signaling Server with Bun
 const tours = new Map(); // tourId -> { guide: ws, participants: Set<ws> }
 const connections = new Map(); // ws -> { userId, tourId, role }
 
@@ -26,6 +27,18 @@ const server = Bun.serve({
 
   fetch(req, server) {
     const url = new URL(req.url);
+
+    // Add CORS headers for all HTTP responses
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*", // Or specify your app's domain for better security
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    // Handle preflight requests for CORS
+    if (req.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
     
     if (url.pathname === "/ws") {
       if (server.upgrade(req)) {
@@ -41,11 +54,17 @@ const server = Bun.serve({
         tours: tours.size,
         connections: connections.size 
       }), {
-        headers: { "Content-Type": "application/json" }
+        headers: { 
+          "Content-Type": "application/json",
+          ...corsHeaders 
+        }
       });
     }
 
-    return new Response("WebRTC Signaling Server", { status: 200 });
+    return new Response("WebRTC Signaling Server", { 
+      status: 200,
+      headers: corsHeaders 
+    });
   },
 });
 
