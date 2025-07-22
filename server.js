@@ -28,48 +28,58 @@ const server = Bun.serve({
   fetch(req, server) {
     const url = new URL(req.url);
 
-    // Add CORS headers for all HTTP responses
+    // --- CORS Headers ---
     const corsHeaders = {
-      "Access-Control-Allow-Origin": "*", // Or specify your app's domain for better security
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
     };
 
-    // Handle preflight requests for CORS
+    // --- Preflight Request (OPTIONS) ---
     if (req.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, {
+        status: 204, // No Content
+        headers: corsHeaders
+      });
     }
     
+    // --- WebSocket Upgrade ---
     if (url.pathname === "/ws") {
       if (server.upgrade(req)) {
-        return; // Successfully upgraded to WebSocket
+        return; 
       }
-      return new Response("Upgrade failed", { status: 500 });
+      return new Response("WebSocket upgrade failed", { 
+        status: 500, 
+        headers: corsHeaders
+      });
     }
 
-    // Health check endpoint
+    // --- Health Check Endpoint ---
     if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ 
+      const body = JSON.stringify({ 
         status: 'ok', 
         tours: tours.size,
         connections: connections.size 
-      }), {
+      });
+      return new Response(body, {
         headers: { 
           "Content-Type": "application/json",
-          ...corsHeaders 
+          ...corsHeaders
         }
       });
     }
 
+    // --- Default Response for other paths ---
     return new Response("WebRTC Signaling Server", { 
       status: 200,
-      headers: corsHeaders 
+      headers: corsHeaders
     });
   },
 });
 
 function handleMessage(ws, data) {
   const { type, tourId, userId, role } = data;
+  const connection = connections.get(ws);
 
   switch (type) {
     case 'join-tour':
@@ -80,18 +90,18 @@ function handleMessage(ws, data) {
       leaveTour(ws);
       break;
 
-    case 'offer':
-      relayToParticipants(ws, data);
+    case 'offer': // From guide to all participants
+      if (connection) relayToParticipants(connection.tourId, data, ws);
       break;
 
-    case 'answer':
-      relayToGuide(ws, data);
+    case 'answer': // From participant to guide
+      if (connection) relayToGuide(connection.tourId, data);
       break;
 
-    case 'ice-candidate':
-      relayIceCandidate(ws, data);
+    case 'ice-candidate': // From either guide or participant
+      if (connection) relayIceCandidate(connection, data);
       break;
-
+      
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong' }));
       break;
@@ -102,10 +112,8 @@ function handleMessage(ws, data) {
 }
 
 function joinTour(ws, tourId, userId, role) {
-  // Limpiar conexión anterior si existe
-  leaveTour(ws);
+  leaveTour(ws); // Ensure user is not in other tours
 
-  // Crear tour si no existe
   if (!tours.has(tourId)) {
     tours.set(tourId, { guide: null, participants: new Set() });
   }
@@ -114,43 +122,27 @@ function joinTour(ws, tourId, userId, role) {
   connections.set(ws, { userId, tourId, role });
 
   if (role === 'guide') {
-    // Solo puede haber un guía
     if (tour.guide) {
-      ws.send(JSON.stringify({ 
-        type: 'error', 
-        message: 'Tour already has a guide' 
-      }));
+      ws.send(JSON.stringify({ type: 'error', message: 'Tour already has a guide' }));
+      connections.delete(ws);
       return;
     }
-    
     tour.guide = ws;
-    console.log(`Guide ${userId} joined tour ${tourId}`);
-    
-    // Notificar a participantes que el guía se conectó
-    tour.participants.forEach(participant => {
-      participant.send(JSON.stringify({
-        type: 'guide-joined',
-        tourId,
-        guideId: userId
-      }));
-    });
-
+    console.log(`Guide ${userId} created/joined tour ${tourId}`);
   } else if (role === 'participant') {
     tour.participants.add(ws);
     console.log(`Participant ${userId} joined tour ${tourId} (${tour.participants.size} total)`);
     
-    // Notificar al guía sobre nuevo participante
+    // Notify the guide that a new participant joined
     if (tour.guide) {
       tour.guide.send(JSON.stringify({
         type: 'participant-joined',
-        tourId,
         participantId: userId,
         totalParticipants: tour.participants.size
       }));
     }
   }
 
-  // Confirmar conexión
   ws.send(JSON.stringify({
     type: 'joined-tour',
     tourId,
@@ -173,30 +165,25 @@ function leaveTour(ws) {
     tour.guide = null;
     console.log(`Guide ${userId} left tour ${tourId}`);
     
-    // Notificar a todos los participantes que el guía se desconectó
+    // Notify all participants that the guide left
     tour.participants.forEach(participant => {
-      participant.send(JSON.stringify({
-        type: 'guide-left',
-        tourId
-      }));
+      participant.send(JSON.stringify({ type: 'guide-left', tourId }));
     });
-
   } else if (role === 'participant') {
     tour.participants.delete(ws);
     console.log(`Participant ${userId} left tour ${tourId} (${tour.participants.size} remaining)`);
     
-    // Notificar al guía
+    // Notify the guide that a participant left
     if (tour.guide) {
       tour.guide.send(JSON.stringify({
         type: 'participant-left',
-        tourId,
         participantId: userId,
         totalParticipants: tour.participants.size
       }));
     }
   }
 
-  // Limpiar tour vacío
+  // If tour is empty, delete it
   if (!tour.guide && tour.participants.size === 0) {
     tours.delete(tourId);
     console.log(`Tour ${tourId} deleted (empty)`);
@@ -205,74 +192,42 @@ function leaveTour(ws) {
   connections.delete(ws);
 }
 
-function relayToParticipants(ws, data) {
-  const connection = connections.get(ws);
-  if (!connection || connection.role !== 'guide') {
-    ws.send(JSON.stringify({ type: 'error', message: 'Only guides can send offers' }));
-    return;
-  }
-
-  const tour = tours.get(connection.tourId);
+function relayToParticipants(tourId, data, senderWs) {
+  const tour = tours.get(tourId);
   if (!tour) return;
+  
+  const senderConnection = connections.get(senderWs);
+  if (!senderConnection || senderConnection.role !== 'guide') return;
 
-  // Relay offer a todos los participantes
-  const message = JSON.stringify({
-    type: 'offer',
-    tourId: data.tourId,
-    offer: data.offer,
-    guideId: connection.userId
+  const message = JSON.stringify({ ...data, fromRole: 'guide' });
+  tour.participants.forEach(p => {
+    // Avoid sending the offer back to the sender if they re-join as a participant somehow
+    if (p !== senderWs) {
+       p.send(message);
+    }
   });
-
-  tour.participants.forEach(participant => {
-    participant.send(message);
-  });
-
-  console.log(`Relayed offer from guide to ${tour.participants.size} participants`);
 }
 
-function relayToGuide(ws, data) {
-  const connection = connections.get(ws);
-  if (!connection || connection.role !== 'participant') {
-    ws.send(JSON.stringify({ type: 'error', message: 'Only participants can send answers' }));
-    return;
-  }
-
-  const tour = tours.get(connection.tourId);
+function relayToGuide(tourId, data) {
+  const tour = tours.get(tourId);
   if (!tour || !tour.guide) return;
-
-  // Relay answer al guía
-  tour.guide.send(JSON.stringify({
-    type: 'answer',
-    tourId: data.tourId,
-    answer: data.answer,
-    participantId: connection.userId
-  }));
-
-  console.log(`Relayed answer from participant ${connection.userId} to guide`);
+  
+  const message = JSON.stringify({ ...data, fromRole: 'participant' });
+  tour.guide.send(message);
 }
 
-function relayIceCandidate(ws, data) {
-  const connection = connections.get(ws);
-  if (!connection) return;
-
-  const tour = tours.get(connection.tourId);
+function relayIceCandidate(senderConnection, data) {
+  const { tourId, role } = senderConnection;
+  const tour = tours.get(tourId);
   if (!tour) return;
+  
+  const message = JSON.stringify({ ...data, fromRole: role });
 
-  const message = JSON.stringify({
-    type: 'ice-candidate',
-    tourId: data.tourId,
-    candidate: data.candidate,
-    fromId: connection.userId,
-    fromRole: connection.role
-  });
-
-  if (connection.role === 'guide') {
-    // Relay ICE candidate a todos los participantes
-    tour.participants.forEach(participant => {
-      participant.send(message);
-    });
+  if (role === 'guide') {
+    // Guide sends candidate to all participants
+    tour.participants.forEach(p => p.send(message));
   } else {
-    // Relay ICE candidate al guía
+    // Participant sends candidate to the guide
     if (tour.guide) {
       tour.guide.send(message);
     }
@@ -284,25 +239,13 @@ function handleDisconnection(ws) {
   leaveTour(ws);
 }
 
-// Cleanup de conexiones muertas cada 30 segundos
+// Keep-alive ping
 setInterval(() => {
-  const deadConnections = [];
-  
-  connections.forEach((connection, ws) => {
-    try {
-      ws.send(JSON.stringify({ type: 'ping' }));
-    } catch (error) {
-      deadConnections.push(ws);
+    for (const ws of connections.keys()) {
+        if (ws.readyState === ws.OPEN) {
+            ws.ping();
+        }
     }
-  });
-
-  deadConnections.forEach(ws => {
-    handleDisconnection(ws);
-  });
-
-  if (deadConnections.length > 0) {
-    console.log(`Cleaned up ${deadConnections.length} dead connections`);
-  }
 }, 30000);
 
 console.log(`🚀 Signaling server running on port ${server.port}`);
