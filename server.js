@@ -58,12 +58,12 @@ const server = Bun.serve({
 });
 
 function handleMessage(ws, data, connectionInfo) {
-  const { type, tourId, userId } = data;
+  const { type, tourId } = data;
   const { userId: fromId } = connectionInfo;
 
   switch (type) {
     case 'join-tour':
-      joinTour(ws, tourId, userId, data.role);
+      joinTour(ws, tourId, data.userId, data.role);
       break;
     case 'offer':
     case 'answer':
