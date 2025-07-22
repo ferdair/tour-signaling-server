@@ -89,6 +89,10 @@ function handleMessage(ws, data) {
       ws.send(JSON.stringify({ type: 'pong' }));
       break;
 
+    case 'pong':
+      // Cliente respondió al ping, conexión está viva
+      break;
+
     default:
       console.log('Unknown message type:', type);
       ws.send(JSON.stringify({ type: 'error', message: 'Unknown message type' }));
